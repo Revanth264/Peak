@@ -1,7 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
-import { getAuth, signInWithCustomToken, signInAnonymously } from 'firebase/auth';
-import { getFirestore, doc, onSnapshot, collection, query, where } from 'firebase/firestore';
-import { initializeApp } from 'firebase/app';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 /* ----------------------------------------------------------------
  Utilities & Hooks
@@ -829,8 +826,11 @@ function RecommendationSection({ title, products, onOpen }) {
 }
 
 function ProductDetail({ p, onClose, onAdd, onFav, favd, on360View, reviews, onProductSelect }) {
-  if (!p) return null;
-  const productReviews = reviews.filter(r => r.productId === p.id);
+  const productReviews = useMemo(() => {
+    if (!p) return [];
+    return reviews.filter(r => r.productId === p.id);
+  }, [p, reviews]);
+
   const [lightboxImage, setLightboxImage] = useState(null);
 
   const similarProducts = useMemo(() => {
@@ -849,6 +849,8 @@ function ProductDetail({ p, onClose, onAdd, onFav, favd, on360View, reviews, onP
       .sort((a, b) => b.rating - a.rating)
       .slice(0, 4);
   }, [p]);
+
+  if (!p) return null;
 
   return (
     <>
@@ -957,84 +959,100 @@ function StarRating({ rating, reviewCount, interactive=false, onRate, size='text
 }
 
 function View360Modal({ product, onClose }) {
-    if (!product || !product.images || product.images.length === 0) return null;
-    const [imageIndex, setImageIndex] = useState(0);
-    const containerRef = useRef(null);
-    const isDragging = useRef(false);
-    const startX = useRef(0);
-    const lastX = useRef(0);
+  const [imageIndex, setImageIndex] = useState(0);
+  const containerRef = useRef(null);
+  const isDragging = useRef(false);
+  const lastX = useRef(0);
 
-    const handleMouseDown = (e) => {
-        isDragging.current = true;
-        startX.current = e.pageX || e.touches[0].pageX;
-        lastX.current = startX.current;
-        if(containerRef.current) containerRef.current.style.cursor = 'grabbing';
+  const images = product?.images ?? [];
+  const imageCount = images.length;
+
+  useEffect(() => {
+    setImageIndex(0);
+  }, [product]);
+
+  const getPageX = useCallback((event) => {
+    if ("touches" in event && event.touches.length > 0) {
+      return event.touches[0].pageX;
+    }
+    return event.pageX;
+  }, []);
+
+  const handleMouseDown = useCallback((event) => {
+    isDragging.current = true;
+    const pageX = getPageX(event);
+    lastX.current = pageX;
+    if (containerRef.current) containerRef.current.style.cursor = "grabbing";
+  }, [getPageX]);
+
+  const handleMouseMove = useCallback((event) => {
+    if (!isDragging.current || imageCount === 0) return;
+    const currentX = getPageX(event);
+    const dx = currentX - lastX.current;
+
+    if (Math.abs(dx) > 10) {
+      setImageIndex((prev) => (prev + (dx > 0 ? -1 : 1) + imageCount) % imageCount);
+      lastX.current = currentX;
+    }
+  }, [getPageX, imageCount]);
+
+  const handleMouseUp = useCallback(() => {
+    if (!isDragging.current) return;
+    isDragging.current = false;
+    if (containerRef.current) containerRef.current.style.cursor = "grab";
+  }, []);
+
+  useEffect(() => {
+    const currentRef = containerRef.current;
+    if (!currentRef) return undefined;
+
+    const moveHandler = (event) => handleMouseMove(event);
+    const upHandler = () => handleMouseUp();
+
+    currentRef.addEventListener("mousemove", moveHandler);
+    currentRef.addEventListener("touchmove", moveHandler);
+    window.addEventListener("mouseup", upHandler);
+    window.addEventListener("touchend", upHandler);
+
+    return () => {
+      currentRef.removeEventListener("mousemove", moveHandler);
+      currentRef.removeEventListener("touchmove", moveHandler);
+      window.removeEventListener("mouseup", upHandler);
+      window.removeEventListener("touchend", upHandler);
     };
+  }, [handleMouseMove, handleMouseUp]);
 
-    const handleMouseMove = (e) => {
-        if (!isDragging.current) return;
-        const currentX = e.pageX || e.touches[0].pageX;
-        const dx = currentX - lastX.current;
+  if (!product || imageCount === 0) return null;
 
-        if (Math.abs(dx) > 10) { // Threshold
-          if (dx > 0) {
-            setImageIndex((prev) => (prev - 1 + product.images.length) % product.images.length);
-          } else {
-            setImageIndex((prev) => (prev + 1) % product.images.length);
-          }
-          lastX.current = currentX;
-        }
-    };
-
-    const handleMouseUp = () => {
-        if (!isDragging.current) return;
-        isDragging.current = false;
-        if(containerRef.current) containerRef.current.style.cursor = 'grab';
-    };
-
-    useEffect(() => {
-        const currentRef = containerRef.current;
-        const moveHandler = (e) => handleMouseMove(e.type === 'touchmove' ? e.touches[0] : e);
-        const upHandler = () => handleMouseUp();
-
-        if(currentRef) {
-          currentRef.addEventListener('mousemove', moveHandler);
-          currentRef.addEventListener('touchmove', moveHandler);
-        }
-        window.addEventListener('mouseup', upHandler);
-        window.addEventListener('touchend', upHandler);
-
-        return () => {
-          if(currentRef) {
-            currentRef.removeEventListener('mousemove', moveHandler);
-            currentRef.removeEventListener('touchmove', moveHandler);
-          }
-          window.removeEventListener('mouseup', upHandler);
-          window.removeEventListener('touchend', upHandler);
-        };
-    }, []);
-
-    return (
-        <div 
-          className="fixed inset-0 bg-black/70 flex flex-col items-center justify-center z-[70] animate-fadeIn"
-          onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}
-        >
-          <div 
-            ref={containerRef}
-            className="relative select-none cursor-grab"
-            onMouseDown={handleMouseDown}
-            onTouchStart={handleMouseDown}
-          >
-            <img src={product.images[imageIndex]} alt={`${product.title} view ${imageIndex + 1}`} className="max-w-[80vw] max-h-[90vh] rounded-2xl" />
-            <div className="absolute bottom-4 left-1/2 -translate-x-1/2 bg-black/50 text-white px-3 py-1 rounded-full text-sm">
-              {imageIndex + 1} / {product.images.length}
-            </div>
-              <div className="absolute top-1/2 -translate-y-1/2 left-4 text-2xl text-white/50">‹</div>
-            <div className="absolute top-1/2 -translate-y-1/2 right-4 text-2xl text-white/50">›</div>
-          </div>
-          <button onClick={onClose} className="mt-4 text-white/80 hover:text-white transition-colors">Close</button>
+  return (
+    <div
+      className="fixed inset-0 bg-black/70 flex flex-col items-center justify-center z-[70] animate-fadeIn"
+      onMouseDown={(e) => {
+        if (e.target === e.currentTarget) onClose();
+      }}
+    >
+      <div
+        ref={containerRef}
+        className="relative select-none cursor-grab"
+        onMouseDown={handleMouseDown}
+        onTouchStart={handleMouseDown}
+      >
+        <img
+          src={images[imageIndex]}
+          alt={`${product.title} view ${imageIndex + 1}`}
+          className="max-w-[80vw] max-h-[90vh] rounded-2xl"
+        />
+        <div className="absolute bottom-4 left-1/2 -translate-x-1/2 bg-black/50 text-white px-3 py-1 rounded-full text-sm">
+          {imageIndex + 1} / {imageCount}
         </div>
-    );
+        <div className="absolute top-1/2 -translate-y-1/2 left-4 text-2xl text-white/50">‹</div>
+        <div className="absolute top-1/2 -translate-y-1/2 right-4 text-2xl text-white/50">›</div>
+      </div>
+      <button onClick={onClose} className="mt-4 text-white/80 hover:text-white transition-colors">
+        Close
+      </button>
+    </div>
+  );
 }
 
 function StorePage({ query, wishlist, setWishlist, onAddToCart, reviews, logProductView }) {
@@ -1278,7 +1296,7 @@ function CartPage({ cart, setCart }) {
   );
 }
 
-function AddressForm({ onCancel, onSave, onDismissToast, setToast }) {
+function AddressForm({ onCancel, onSave, setToast }) {
   const [name, setName] = useState("");
   const [phone, setPhone] = useState("");
   const [line1, setLine1] = useState("");
@@ -1666,7 +1684,7 @@ function ReviewFormModal({ product, user, onClose, onSaveReview, setToast }) {
     );
 }
 
-function AccountPage({ user, setUser, reviews, setReviews, setToast }) {
+function AccountPage({ user, setUser, setReviews, setToast }) {
   const tabQS = getHashQuery("tab");
   const [tab, setTab] = useState(tabQS || "profile");
   const [addresses, setAddresses] = useLocal("pk_addresses", []);
@@ -1675,9 +1693,15 @@ function AccountPage({ user, setUser, reviews, setReviews, setToast }) {
   const [reviewingProduct, setReviewingProduct] = useState(null);
 
   useEffect(() => {
-    const t = getHashQuery("tab");
-    if (t) setTab(t);
-  }, [window.location.hash]);
+    const updateTabFromHash = () => {
+      const nextTab = getHashQuery("tab");
+      if (nextTab) setTab(nextTab);
+    };
+
+    updateTabFromHash();
+    window.addEventListener("hashchange", updateTabFromHash);
+    return () => window.removeEventListener("hashchange", updateTabFromHash);
+  }, []);
 
   const [name, setName] = useState(user?.name || "");
   const [email, setEmail] = useState(user?.email || "");
@@ -1932,7 +1956,7 @@ function HomePage({ getRecommendations, hasActivity }) {
               <a href="#/store" className="text-sm underline hover:no-underline" onClick={() => localStorage.setItem("pk_store_cat", "all")}>View all</a>
             </div>
             <div className="grid sm:grid-cols-2 md:grid-cols-4 gap-6 [>_*]:min-w-0">
-              {featuredProducts.map((p, i) => (
+              {featuredProducts.map((p) => (
                 <a key={p.id} href="#/store" className="group block min-w-0" onClick={() => localStorage.setItem("pk_store_cat", "all")}>
                   <div className="aspect-[4/3] w-full overflow-hidden rounded-2xl mb-3">
                     <img src={p.images[0]} alt={p.title} className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-110"/>
@@ -1969,7 +1993,7 @@ function HomePage({ getRecommendations, hasActivity }) {
           <section className="mb-24 text-left">
             <h2 className="text-2xl font-semibold mb-6">Shop by Category</h2>
             <div className="grid sm:grid-cols-2 md:grid-cols-4 gap-4">
-              {CATEGORIES.filter(c => c.id !== 'all').map((cat, i) => (
+              {CATEGORIES.filter(c => c.id !== 'all').map((cat) => (
                 <a key={cat.id} href="#/store" className="p-6 rounded-2xl border border-black/10 hover:border-black/30 hover:shadow-lg hover:-translate-y-1 transition-all text-left group relative overflow-hidden liquid-hover" onClick={() => localStorage.setItem("pk_store_cat", cat.id)}>
                   <span className="font-medium relative z-10">{cat.label}</span>
                 </a>
@@ -2008,7 +2032,7 @@ function Toast({ toastInfo, onDismiss }) {
 
   return (
     <div className="fixed bottom-5 left-1/2 -translate-x-1/2 z-50 transition-all duration-300 ease-in-out" style={{opacity: visible ? 1 : 0, transform: visible ? 'translate(-50%, 0)' : 'translate(-50%, 20px)'}}>
-      <div className="relative flex items-center gap-4 bg-zinc-800 text-white rounded-xl shadow-lg px-4 py-3 overflow-hidden">
+      <div className={cls("relative flex items-center gap-4 text-white rounded-xl shadow-lg px-4 py-3 overflow-hidden", color)}>
         {toastInfo.item && <img src={toastInfo.item.images[0]} alt={toastInfo.item.title} className="w-12 h-12 object-cover rounded-md" />}
         <div>
           <div className="font-semibold">{toastInfo.message}</div>
@@ -2100,7 +2124,7 @@ export default function App() {
   else if (path === "#/community") page = <CommunityNotice key={pageKey} />;
   else if (path === "#/login") page = <LoginPage onLogin={setUser} setToast={setToast} />;
   else if (path === "#/register") page = <RegisterPage onRegister={setUser} setToast={setToast} />;
-  else if (path.startsWith("#/account")) page = <AccountPage key={pageKey} user={user} setUser={setUser} reviews={reviews} setReviews={setReviews} setToast={setToast} />;
+  else if (path.startsWith("#/account")) page = <AccountPage key={pageKey} user={user} setUser={setUser} setReviews={setReviews} setToast={setToast} />;
   else page = <HomePage key={pageKey} getRecommendations={getRecommendations} hasActivity={hasActivity} />;
 
   return (
