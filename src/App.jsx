@@ -58,6 +58,69 @@ const useIntersectionObserver = (options) => {
   return [setNode, entry];
 };
 
+const useScroll = () => {
+    const [scrollY, setScrollY] = useState(0);
+    useEffect(() => {
+      const handleScroll = () => setScrollY(window.scrollY);
+      window.addEventListener('scroll', handleScroll, { passive: true });
+      return () => window.removeEventListener('scroll', handleScroll);
+    }, []);
+    return scrollY;
+};
+
+/* ----------------------------------------------------------------
+ Recommendation Algorithm Hook
+------------------------------------------------------------------*/
+const useUserActivity = () => {
+  const [activity, setActivity] = useLocal("pk_user_activity", {
+    viewedProducts: [], // Stores {id, category, subCategory}
+  });
+
+  const logProductView = (product) => {
+    if (!product) return;
+    setActivity(prev => {
+      const newView = { id: product.id, category: product.category, subCategory: product.subCategory };
+      const updatedViews = [newView, ...prev.viewedProducts.filter(p => p.id !== product.id)].slice(0, 20);
+      return { ...prev, viewedProducts: updatedViews };
+    });
+  };
+
+  const getRecommendations = (count = 4) => {
+    const { viewedProducts } = activity;
+
+    if (viewedProducts.length === 0) {
+      return MOCK_PRODUCTS.slice().sort((a, b) => b.rating - a.rating).slice(0, count);
+    }
+
+    const interestProfile = viewedProducts.reduce((acc, p) => {
+      acc[p.category] = (acc[p.category] || 0) + 1;
+      acc[p.subCategory] = (acc[p.subCategory] || 0) + 2;
+      return acc;
+    }, {});
+
+    const viewedIds = new Set(viewedProducts.map(p => p.id));
+
+    const recommended = MOCK_PRODUCTS
+      .filter(p => !viewedIds.has(p.id))
+      .map(p => {
+        const score = (interestProfile[p.category] || 0) + (interestProfile[p.subCategory] || 0);
+        return { ...p, relevanceScore: score };
+      })
+      .filter(p => p.relevanceScore > 0)
+      .sort((a, b) => {
+        if (b.relevanceScore !== a.relevanceScore) {
+          return b.relevanceScore - a.relevanceScore;
+        }
+        return b.rating - a.rating;
+      });
+
+    return recommended.slice(0, count);
+  };
+
+  return { logProductView, getRecommendations, hasActivity: activity.viewedProducts.length > 0 };
+};
+
+
 /* ----------------------------------------------------------------
  Data
 ------------------------------------------------------------------*/
@@ -176,58 +239,6 @@ const MOCK_PRODUCTS = [
 ];
 
 /* ----------------------------------------------------------------
- Recommendation Algorithm Hook
-------------------------------------------------------------------*/
-const useUserActivity = () => {
-  const [activity, setActivity] = useLocal("pk_user_activity", {
-    viewedProducts: [], // Stores {id, category, subCategory}
-  });
-
-  const logProductView = (product) => {
-    if (!product) return;
-    setActivity(prev => {
-      const newView = { id: product.id, category: product.category, subCategory: product.subCategory };
-      const updatedViews = [newView, ...prev.viewedProducts.filter(p => p.id !== product.id)].slice(0, 20);
-      return { ...prev, viewedProducts: updatedViews };
-    });
-  };
-
-  const getRecommendations = (count = 4) => {
-    const { viewedProducts } = activity;
-
-    if (viewedProducts.length === 0) {
-      return MOCK_PRODUCTS.slice().sort((a, b) => b.rating - a.rating).slice(0, count);
-    }
-
-    const interestProfile = viewedProducts.reduce((acc, p) => {
-      acc[p.category] = (acc[p.category] || 0) + 1;
-      acc[p.subCategory] = (acc[p.subCategory] || 0) + 2;
-      return acc;
-    }, {});
-
-    const viewedIds = new Set(viewedProducts.map(p => p.id));
-
-    const recommended = MOCK_PRODUCTS
-      .filter(p => !viewedIds.has(p.id))
-      .map(p => {
-        const score = (interestProfile[p.category] || 0) + (interestProfile[p.subCategory] || 0);
-        return { ...p, relevanceScore: score };
-      })
-      .filter(p => p.relevanceScore > 0)
-      .sort((a, b) => {
-        if (b.relevanceScore !== a.relevanceScore) {
-          return b.relevanceScore - a.relevanceScore;
-        }
-        return b.rating - a.rating;
-      });
-
-    return recommended.slice(0, count);
-  };
-
-  return { logProductView, getRecommendations, hasActivity: activity.viewedProducts.length > 0 };
-};
-
-/* ----------------------------------------------------------------
  Header helpers
 ------------------------------------------------------------------*/
 function NavLink({ to, label, path, onClick, ...props }) {
@@ -332,7 +343,7 @@ function ProfileMenu({ user, onLogout, points }) {
 /* ----------------------------------------------------------------
  DESKTOP-ONLY: Apple-style Mega Menu (auto-sized dropdown)
 ------------------------------------------------------------------*/
-function StoreMegaMenu({ open, setOpen }) {
+function StoreMegaMenu({ open, setOpen, handleMouseEnter, handleMouseLeave }) {
   const menuData = [
     {
       heading: "Shop by Category",
@@ -370,6 +381,7 @@ function StoreMegaMenu({ open, setOpen }) {
         open ? "opacity-100 translate-y-0" : "opacity-0 -translate-y-2",
         open ? "pointer-events-auto" : "pointer-events-none"
       )}
+      onMouseLeave={handleMouseLeave}
       aria-hidden={!open}
     >
       <div
@@ -377,6 +389,7 @@ function StoreMegaMenu({ open, setOpen }) {
           "w-full max-w-6xl rounded-2xl border border-neutral-800",
           "bg-neutral-900/95 shadow-2xl px-8 py-8"
         )}
+        onMouseEnter={handleMouseEnter}
         onMouseDown={(e) => e.stopPropagation()}
       >
         <div className="grid grid-cols-1 md:grid-cols-4 gap-x-8">
@@ -446,6 +459,7 @@ function StoreMegaMenu({ open, setOpen }) {
     </div>
   );
 }
+
 
 /* ----------------------------------------------------------------
  TopBar
@@ -551,7 +565,6 @@ function TopBar({ path, cartCount, wishlistCount, user, setUser, onSearch, store
                   path={path}
                   onClick={() => setStoreOpen(false)}
                 />
-                <StoreMegaMenu open={storeOpen} setOpen={setStoreOpen} />
               </div>
               <NavLink to="#/media" label="Media" path={path} />
               <NavLink to="#/blog" label="Blog" path={path} />
@@ -666,12 +679,13 @@ function TopBar({ path, cartCount, wishlistCount, user, setUser, onSearch, store
           </div>
         </div>
       )}
+      <StoreMegaMenu open={storeOpen} setOpen={setStoreOpen} handleMouseEnter={handleStoreMouseEnter} handleMouseLeave={handleStoreMouseLeave} />
     </header>
   );
 }
 
 /* ----------------------------------------------------------------
- Store
+ Store & Product Details
 ------------------------------------------------------------------*/
 function ProductCard({ p, onAdd, onFav, favd, onOpen, onQuickView }) {
   const [beat, setBeat] = useState(false);
@@ -994,20 +1008,21 @@ function View360Modal({ product, onClose }) {
 
     useEffect(() => {
         const currentRef = containerRef.current;
-        const moveHandler = (e) => handleMouseMove(e.type === 'touchmove' ? e.touches[0] : e);
+        const moveHandler = (e) => handleMouseMove(e);
         const upHandler = () => handleMouseUp();
+        const touchMoveHandler = (e) => handleMouseMove(e.touches[0]);
 
-        if(currentRef) {
+        if (currentRef) {
           currentRef.addEventListener('mousemove', moveHandler);
-          currentRef.addEventListener('touchmove', moveHandler);
+          currentRef.addEventListener('touchmove', touchMoveHandler);
         }
         window.addEventListener('mouseup', upHandler);
         window.addEventListener('touchend', upHandler);
 
         return () => {
-          if(currentRef) {
+          if (currentRef) {
             currentRef.removeEventListener('mousemove', moveHandler);
-            currentRef.removeEventListener('touchmove', moveHandler);
+            currentRef.removeEventListener('touchmove', touchMoveHandler);
           }
           window.removeEventListener('mouseup', upHandler);
           window.removeEventListener('touchend', upHandler);
@@ -1111,7 +1126,7 @@ function StorePage({ query, wishlist, setWishlist, onAddToCart, reviews, logProd
 
   return (
     <main className="w-full px-4 sm:px-6 lg:px-8 py-8">
-      <div className="max-w-7xl">
+      <div className="max-w-7xl mx-auto">
         <div className="flex flex-col md:flex-row md:items-end md:justify-between gap-4 text-left">
           <div>
             <h1 className="text-3xl font-semibold tracking-tight">Store</h1>
@@ -1130,7 +1145,16 @@ function StorePage({ query, wishlist, setWishlist, onAddToCart, reviews, logProd
           {CATEGORIES.map((c) => (
             <button
               key={c.id}
-              onClick={() => setActive(c.id)}
+              onClick={() => {
+                setActive(c.id);
+                const targetId = `products-${c.id}`;
+                setTimeout(() => {
+                  const targetElement = document.getElementById(targetId);
+                  if (targetElement) {
+                    targetElement.scrollIntoView({ behavior: 'smooth' });
+                  }
+                }, 0);
+              }}
               className={cls(
                 "px-4 py-2 rounded-full text-sm border transition-all hover:scale-105 active:scale-100",
                 active === c.id ? "bg-black text-white shadow-lg" : "hover:bg-black/5 hover:border-black/30"
@@ -1163,24 +1187,14 @@ function StorePage({ query, wishlist, setWishlist, onAddToCart, reviews, logProd
       </div>
 
       <ProductDetail
-        p={detail}
+        p={detail || quickView}
         reviews={reviews}
         onProductSelect={handleProductSelect}
-        onClose={() => setDetail(null)}
-        on360View={(pp) => { setDetail(null); setView360(pp); }}
+        onClose={() => { setDetail(null); setQuickView(null); }}
+        on360View={(pp) => { setDetail(null); setQuickView(null); setView360(pp); }}
         onAdd={onAddToCart}
         onFav={toggleFav}
-        favd={detail && !!wishlist.find((w) => w.id === detail.id)}
-      />
-      <ProductDetail
-        p={quickView}
-        reviews={reviews}
-        onProductSelect={handleProductSelect}
-        onClose={() => setQuickView(null)}
-        on360View={(pp) => { setQuickView(null); setView360(pp); }}
-        onAdd={onAddToCart}
-        onFav={toggleFav}
-        favd={quickView && !!wishlist.find((w) => w.id === quickView.id)}
+        favd={(detail || quickView) && !!wishlist.find((w) => w.id === (detail || quickView).id)}
       />
       {view360 && <View360Modal product={view360} onClose={() => setView360(null)} />}
     </main>
@@ -1193,7 +1207,7 @@ function StorePage({ query, wishlist, setWishlist, onAddToCart, reviews, logProd
 function WishlistPage({ wishlist, setWishlist, onAddToCart }) {
   return (
     <main className="w-full px-4 sm:px-6 lg:px-8 py-10">
-      <div className="max-w-7xl">
+      <div className="max-w-7xl mx-auto">
         <h1 className="text-3xl font-semibold tracking-tight mb-6 text-left">Wishlist</h1>
         {wishlist.length === 0 ? (
           <p className="text-black/60 text-left">Your wishlist is empty.</p>
@@ -1240,7 +1254,7 @@ function CartPage({ cart, setCart }) {
 
   return (
     <main className="w-full px-4 sm:px-6 lg:px-8 py-10">
-      <div className="max-w-7xl">
+      <div className="max-w-7xl mx-auto">
         <h1 className="text-3xl font-semibold tracking-tight mb-6 text-left">Your Bag</h1>
         {cart.length === 0 ? (
           <p className="text-black/60 text-left">Your bag is empty.</p>
@@ -1278,7 +1292,7 @@ function CartPage({ cart, setCart }) {
   );
 }
 
-function AddressForm({ onCancel, onSave, onDismissToast, setToast }) {
+function AddressForm({ onCancel, onSave, setToast }) {
   const [name, setName] = useState("");
   const [phone, setPhone] = useState("");
   const [line1, setLine1] = useState("");
@@ -1351,7 +1365,7 @@ function CheckoutPage({ cart, setCart, points, setPoints, setToast }) {
 
   return (
     <main className="w-full px-4 sm:px-6 lg:px-8 py-10">
-      <div className="max-w-7xl">
+      <div className="max-w-7xl mx-auto">
         <h1 className="text-3xl font-semibold tracking-tight mb-6">Checkout</h1>
 
         <div className="grid lg:grid-cols-3 gap-8">
@@ -1444,7 +1458,7 @@ function OrderSuccessPage() {
 
   return (
     <main className="relative w-full px-4 sm:px-6 lg:px-8 py-16 overflow-hidden">
-      <div className="max-w-7xl">
+      <div className="max-w-7xl mx-auto">
         {loading ? (
             <div className="flex flex-col items-center justify-center h-48">
               <svg className="animate-spin h-10 w-10 text-black" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
@@ -1485,6 +1499,7 @@ function OrderSuccessPage() {
 function LoginPage({ onLogin, setToast }) {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
 
   const handleLogin = (e) => {
     e.preventDefault();
@@ -1496,12 +1511,30 @@ function LoginPage({ onLogin, setToast }) {
       setToast({ message: 'Invalid email or password.', type: 'error' });
     }
   };
+  
+  const handleGoogleLogin = () => {
+    // This is a placeholder for a real Google login flow
+    console.log("Simulating Google login...");
+    setToast({ message: 'Google login initiated!', type: 'success' });
+    onLogin({ name: 'Google User', email: 'google@example.com' });
+    window.location.hash = '#/account?tab=profile';
+  };
 
   return (
     <main className="w-full px-4 sm:px-6 lg:px-8 py-16">
       <div className="max-w-md mx-auto p-8 border rounded-2xl bg-white shadow-lg animate-fadeInUp">
         <h1 className="text-2xl font-semibold tracking-tight mb-4 text-left">Login</h1>
-        <p className="text-sm text-black/60 mb-6 text-left">Use demo@peakime.com / password to log in.</p>
+        <div className="flex flex-col gap-4">
+            <button onClick={handleGoogleLogin} className="flex items-center justify-center gap-2 w-full px-4 py-3 rounded-xl border hover:bg-black/5 transition-colors">
+                <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 48 48"><path fill="#FFC107" d="M43.611 20.083H42V20H24v8h11.303c-1.612 4.908-6.497 8.528-11.303 8.528-6.627 0-12-5.373-12-12s5.373-12 12-12c3.059 0 5.842 1.154 8.024 3.054l5.657-5.657C34.046 6.096 29.091 4 24 4c-11.053 0-20 8.947-20 20s8.947 20 20 20c11.053 0 20-8.947 20-20c0-1.341-.138-2.65-.389-3.917z"/><path fill="#FF3D00" d="M6.306 14.691L14.69 20.081L14.691 20.083z"/><path fill="#4CAF50" d="M14.69 20.081v8h11.303l-5.657 5.657C24.046 32.904 29.091 35 24 35c-6.627 0-12-5.373-12-12s5.373-12 12-12c5.091 0 10.046 2.096 13.654 5.753z"/><path fill="#1976D2" d="M14.69 20.081h11.303c1.612-4.908 6.497-8.528 11.303-8.528s9.691 3.62 11.303 8.528h-11.303z"/></svg>
+                Sign in with Google
+            </button>
+        </div>
+        <div className="relative flex items-center py-4">
+            <div className="flex-grow border-t border-gray-300"></div>
+            <span className="flex-shrink mx-4 text-gray-400 text-sm">or</span>
+            <div className="flex-grow border-t border-gray-300"></div>
+        </div>
         <form onSubmit={handleLogin} className="space-y-4">
           <input
             type="email"
@@ -1511,14 +1544,25 @@ function LoginPage({ onLogin, setToast }) {
             className="w-full px-4 py-3 rounded-xl border bg-black/5 focus:outline-none focus:border-black transition-colors"
             required
           />
-          <input
-            type="password"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            placeholder="Password"
-            className="w-full px-4 py-3 rounded-xl border bg-black/5 focus:outline-none focus:border-black transition-colors"
-            required
-          />
+          <div className="relative">
+              <input
+                type={showPassword ? "text" : "password"}
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                placeholder="Password"
+                pattern="(?=.*\d)(?=.*[a-z])(?=.*[A-Z])(?=.*\W).{8,}"
+                title="Must contain at least one number, one uppercase letter, one lowercase letter, one symbol, and at least 8 characters."
+                className="w-full px-4 py-3 rounded-xl border bg-black/5 focus:outline-none focus:border-black transition-colors"
+                required
+              />
+              <button
+                type="button"
+                onClick={() => setShowPassword(!showPassword)}
+                className="absolute inset-y-0 right-0 pr-3 flex items-center text-sm text-gray-500"
+              >
+                {showPassword ? "Hide" : "Show"}
+              </button>
+          </div>
           <button type="submit" className="w-full px-4 py-3 rounded-xl bg-black text-white hover:opacity-90 transition-opacity">
             Log In
           </button>
@@ -1535,10 +1579,16 @@ function RegisterPage({ onRegister, setToast }) {
     const [name, setName] = useState('');
     const [email, setEmail] = useState('');
     const [password, setPassword] = useState('');
+    const [showPassword, setShowPassword] = useState(false);
 
     const handleRegister = (e) => {
         e.preventDefault();
-        // Mock registration logic
+        const passwordRegex = /^(?=.*\d)(?=.*[a-z])(?=.*[A-Z])(?=.*\W).{8,}$/;
+        if (!passwordRegex.test(password)) {
+            setToast({ message: "Password must contain at least one number, one uppercase letter, one lowercase letter, one symbol, and be at least 8 characters long.", type: 'error' });
+            return;
+        }
+        
         if (name && email && password) {
             onRegister({ name, email });
             window.location.hash = '#/login';
@@ -1547,12 +1597,30 @@ function RegisterPage({ onRegister, setToast }) {
             setToast({ message: 'Please fill out all fields.', type: 'error' });
         }
     };
+    
+    const handleGoogleRegister = () => {
+        // Placeholder for real Google registration flow
+        console.log("Simulating Google registration...");
+        setToast({ message: 'Google registration initiated!', type: 'success' });
+        onRegister({ name: 'Google User', email: 'google@example.com' });
+        window.location.hash = '#/account?tab=profile';
+    };
 
     return (
         <main className="w-full px-4 sm:px-6 lg:px-8 py-16">
             <div className="max-w-md mx-auto p-8 border rounded-2xl bg-white shadow-lg animate-fadeInUp">
                 <h1 className="text-2xl font-semibold tracking-tight mb-4 text-left">Register</h1>
-                <p className="text-sm text-black/60 mb-6 text-left">Create a new account</p>
+                <div className="flex flex-col gap-4">
+                    <button onClick={handleGoogleRegister} className="flex items-center justify-center gap-2 w-full px-4 py-3 rounded-xl border hover:bg-black/5 transition-colors">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 48 48"><path fill="#FFC107" d="M43.611 20.083H42V20H24v8h11.303c-1.612 4.908-6.497 8.528-11.303 8.528-6.627 0-12-5.373-12-12s5.373-12 12-12c3.059 0 5.842 1.154 8.024 3.054l5.657-5.657C34.046 6.096 29.091 4 24 4c-11.053 0-20 8.947-20 20s8.947 20 20 20c11.053 0 20-8.947 20-20c0-1.341-.138-2.65-.389-3.917z"/><path fill="#FF3D00" d="M6.306 14.691L14.69 20.081L14.691 20.083z"/><path fill="#4CAF50" d="M14.69 20.081v8h11.303l-5.657 5.657C24.046 32.904 29.091 35 24 35c-6.627 0-12-5.373-12-12s5.373-12 12-12c5.091 0 10.046 2.096 13.654 5.753z"/><path fill="#1976D2" d="M14.69 20.081h11.303c1.612-4.908 6.497-8.528 11.303-8.528s9.691 3.62 11.303 8.528h-11.303z"/></svg>
+                        Sign up with Google
+                    </button>
+                </div>
+                <div className="relative flex items-center py-4">
+                    <div className="flex-grow border-t border-gray-300"></div>
+                    <span className="flex-shrink mx-4 text-gray-400 text-sm">or</span>
+                    <div className="flex-grow border-t border-gray-300"></div>
+                </div>
                 <form onSubmit={handleRegister} className="space-y-4">
                     <input
                         type="text"
@@ -1570,14 +1638,25 @@ function RegisterPage({ onRegister, setToast }) {
                         className="w-full px-4 py-3 rounded-xl border bg-black/5 focus:outline-none focus:border-black transition-colors"
                         required
                     />
-                    <input
-                        type="password"
-                        value={password}
-                        onChange={(e) => setPassword(e.target.value)}
-                        placeholder="Password"
-                        className="w-full px-4 py-3 rounded-xl border bg-black/5 focus:outline-none focus:border-black transition-colors"
-                        required
-                    />
+                    <div className="relative">
+                        <input
+                          type={showPassword ? "text" : "password"}
+                          value={password}
+                          onChange={(e) => setPassword(e.target.value)}
+                          placeholder="Password"
+                          pattern="(?=.*\d)(?=.*[a-z])(?=.*[A-Z])(?=.*\W).{8,}"
+                          title="Must contain at least one number, one uppercase letter, one lowercase letter, one symbol, and be at least 8 characters."
+                          className="w-full px-4 py-3 rounded-xl border bg-black/5 focus:outline-none focus:border-black transition-colors"
+                          required
+                        />
+                        <button
+                          type="button"
+                          onClick={() => setShowPassword(!showPassword)}
+                          className="absolute inset-y-0 right-0 pr-3 flex items-center text-sm text-gray-500"
+                        >
+                          {showPassword ? "Hide" : "Show"}
+                        </button>
+                    </div>
                     <button type="submit" className="w-full px-4 py-3 rounded-xl bg-black text-white hover:opacity-90 transition-opacity">
                         Register
                     </button>
@@ -1743,7 +1822,7 @@ function AccountPage({ user, setUser, reviews, setReviews, setToast }) {
 
   return (
     <main className="w-full px-4 sm:px-6 lg:px-8 py-10">
-      <div className="max-w-7xl">
+      <div className="max-w-7xl mx-auto">
         <h1 className="text-3xl font-semibold tracking-tight mb-6 text-left">Account</h1>
         <div className="flex gap-2 mb-4 border-b pb-2">
           <TabButton id="profile">Profile</TabButton>
@@ -1828,12 +1907,12 @@ function HighlightOnScroll({ children }) {
 }
 
 function EmptyShell({ title }) {
-  const content = { Media: { subtitle: "Exclusive content, behind-the-scenes, and creator spotlights", items: [{ icon: "📹", title: "Featured Videos", desc: "Latest drops and showcases" },{ icon: "🎤", title: "Artist Interviews", desc: "Meet the creators" },{ icon: "📦", title: "Product Showcases", desc: "Behind the scenes" },{ icon: "🌟", title: "Community Highlights", desc: "Fan features and stories" }] }, Careers: { subtitle: "Join our team and help shape the future of anime retail", items: [{ icon: "💼", title: "Open Positions", desc: "Current opportunities" },{ icon: "🏢", title: "Company Culture", desc: "Life at Peakime" },{ icon: "🎁", title: "Benefits & Perks", desc: "What we offer" },{ icon: "🚀", title: "Growth Opportunities", desc: "Build your career" }] }, Contact: { subtitle: "Get in touch with our team for support or partnerships", items: [{ icon: "💬", title: "Customer Support", desc: "24/7 assistance" },{ icon: "🤝", title: "Business Inquiries", desc: "Partnership opportunities" },{ icon: "📢", title: "Press & Media", desc: "Media kit and contacts" },{ icon: "🎯", title: "Creator Partnerships", desc: "Collaborate with us" }] }};
+  const content = { Media: { subtitle: "Exclusive content, behind-the-scenes, and creator spotlights", items: [{ icon: "📹", title: "Featured Videos", desc: "Latest drops and showcases" },{ icon: "🎤", title: "Artist Interviews", desc: "Meet the creators" },{ icon: "📦", title: "Product Showcases", desc: "Behind the scenes" },{ icon: "🌟", title: "Community Highlights", desc: "Fan features and stories" }] }, Careers: { subtitle: "Join our team and help shape the future of anime retail", items: [{ icon: "💼", title: "Open Positions", desc: "Current opportunities" },{ icon: "🏢", title: "Company Culture", desc: "Life at Peakime" },{ icon: "🎁", title: "Benefits & Perks", desc: "What we offer" },{ icon: "🚀", title: "Growth Opportunities", desc: "Build your career" }] }, Contact: { subtitle: "Get in touch with our team for support or partnerships", items: [{ icon: "💬", title: "Customer Support", desc: "24/7 assistance" },{ icon: "🤝", title: "Business Inquiries", desc: "Partnership opportunities" },{ icon: "📢", title: "Press & Media", desc: "Media kit and contacts" },{ icon: "🎯", title: "Creator Partnerships", desc: "Collaborate with us" }] }, Shipping: { subtitle: "Everything you need to know about shipping and returns", items: [{ icon: "🚚", title: "Shipping Information", desc: "Learn about our shipping options and delivery times" },{ icon: "↩️", title: "Return Policy", desc: "Find out how to return an item" },{ icon: "🌍", title: "International Shipping", desc: "Details for orders outside of India" }] }, FAQ: { subtitle: "Frequently asked questions", items: [{ icon: "❓", title: "General Questions", desc: "Find answers to common questions about our products and services" },{ icon: "📦", title: "Order & Shipping", desc: "Questions about orders, tracking, and delivery" },{ icon: "💳", title: "Payments", desc: "Questions about billing and payment methods" }] }, About: { subtitle: "Our story and mission", items: [{ icon: "🌱", title: "Our History", desc: "Learn how Peakime started" },{ icon: "🎯", title: "Our Mission", desc: "What we're working towards" },{ icon: "🤝", title: "Partnerships", desc: "Our collaborations with creators and brands" }] }, Privacy: { subtitle: "Our privacy policy", items: [{ icon: "🔒", title: "Data Security", desc: "How we protect your personal information" },{ icon: "📊", title: "Data Collection", desc: "What information we collect and why" },{ icon: "⚖️", title: "Your Rights", desc: "Your rights regarding your data" }] }, Terms: { subtitle: "Our terms of service", items: [{ icon: "📝", title: "Terms of Use", desc: "Rules for using our website" },{ icon: "📦", title: "Purchase Terms", desc: "Terms related to buying our products" },{ icon: "💡", title: "Intellectual Property", desc: "Information about copyrights and trademarks" }] }};
   const pageContent = content[title] || { subtitle: "Content coming soon", items: [{ icon: "🔄", title: "Updates coming", desc: "Stay tuned" },{ icon: "⏳", title: "Check back later", desc: "Under development" },{ icon: "🛠️", title: "Under development", desc: "Building something great" },{ icon: "✨", title: "Stay tuned", desc: "Coming soon" }]};
 
   return (
     <main className="animated-bg w-full">
-        <div className="max-w-7xl px-4 sm:px-6 lg:px-8 py-16">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-16">
           <div className="mb-12 text-left">
             <h1 className="text-4xl font-semibold tracking-tight">{title}</h1>
             <p className="text-black/60 text-lg mt-3">{pageContent.subtitle}</p>
@@ -1852,21 +1931,56 @@ function EmptyShell({ title }) {
 }
 
 function BlogPostPage() {
+    const handleShopLinkClick = (e) => {
+        e.preventDefault();
+        localStorage.setItem("pk_store_cat", "figures");
+        window.dispatchEvent(new CustomEvent('category-change'));
+        window.location.hash = '#/store';
+    };
+
     return (
-      <main className="w-full px-4 sm:px-6 lg:px-8 py-16">
-        <div className="max-w-3xl">
-          <h1 className="text-4xl font-bold tracking-tight mb-4 text-left">Top 5 Figures of the Summer</h1>
-          <p className="text-black/60 mb-8 text-left">This season's must-have collectibles for any serious fan.</p>
-          <div className="prose lg:prose-lg max-w-none space-y-4">
+      <main className="w-full bg-zinc-50/50 px-4 sm:px-6 lg:px-8 py-16">
+        <div className="max-w-3xl mx-auto">
+          <h1 className="text-4xl font-bold tracking-tight mb-4 text-left animate-fadeInUp" style={{ animationDelay: '100ms' }}>Top 5 Figures of the Summer</h1>
+          <p className="text-black/60 mb-8 text-left animate-fadeInUp" style={{ animationDelay: '200ms' }}>This season's must-have collectibles for any serious fan.</p>
+          <div className="prose lg:prose-lg max-w-none space-y-4 animate-fadeInUp" style={{ animationDelay: '300ms' }}>
               <HighlightOnScroll>Summer is always an exciting time for new drops, and this year is no exception. We've seen some incredible new figures hit the market. Here are our top picks available right here at Peakime.</HighlightOnScroll>
+              
               <h2 className="text-2xl font-semibold mt-8 mb-4 text-left">1. Joy Warrior • 10cm Figure</h2>
-              <div className="flex gap-4 items-start mb-4">
-                <img src={MOCK_PRODUCTS[0].images[0]} alt={MOCK_PRODUCTS[0].title} className="w-48 rounded-lg" />
+              <div className="flex flex-col sm:flex-row gap-4 items-start mb-4">
+                <img src={MOCK_PRODUCTS.find(p => p.id === 'f1').images[0]} alt={MOCK_PRODUCTS.find(p => p.id === 'f1').title} className="w-full sm:w-48 rounded-lg shadow-md hover:shadow-xl transition-shadow" />
                 <HighlightOnScroll>No collection is complete without the iconic Joy Warrior. Its dynamic pose and vibrant colors make it a true centerpiece. The attention to detail is something you have to see to believe.</HighlightOnScroll>
               </div>
-              <a href="#/store" onClick={() => { localStorage.setItem("pk_store_cat", "figures"); window.dispatchEvent(new CustomEvent('category-change'));}} className="text-blue-600 hover:underline text-left">Shop Joy Warrior →</a>
+              <a href="#/store" onClick={handleShopLinkClick} className="text-blue-600 hover:underline text-left inline-block">Shop Joy Warrior →</a>
+
               <h2 className="text-2xl font-semibold mt-8 mb-4 text-left">2. Sea Empress • 12cm Figure</h2>
-              <HighlightOnScroll>The elegance of the Sea Empress figure is unmatched. From the flowing hair to the intricate details on her gown, this piece is a work of art. It's a limited run, so don't miss out.</HighlightOnScroll>
+               <div className="flex flex-col sm:flex-row gap-4 items-start mb-4">
+                <img src={MOCK_PRODUCTS.find(p => p.id === 'f2').images[0]} alt={MOCK_PRODUCTS.find(p => p.id === 'f2').title} className="w-full sm:w-48 rounded-lg shadow-md hover:shadow-xl transition-shadow" />
+                <HighlightOnScroll>The elegance of the Sea Empress figure is unmatched. From the flowing hair to the intricate details on her gown, this piece is a work of art. It's a limited run, so don't miss out.</HighlightOnScroll>
+               </div>
+               <a href="#/store" onClick={handleShopLinkClick} className="text-blue-600 hover:underline text-left inline-block">Shop Sea Empress →</a>
+
+              <h2 className="text-2xl font-semibold mt-8 mb-4 text-left">3. Shadow Ninja • 15cm Figure</h2>
+               <div className="flex flex-col sm:flex-row gap-4 items-start mb-4">
+                <img src={MOCK_PRODUCTS.find(p => p.id === 'f3').images[0]} alt={MOCK_PRODUCTS.find(p => p.id === 'f3').title} className="w-full sm:w-48 rounded-lg shadow-md hover:shadow-xl transition-shadow" />
+                <HighlightOnScroll>For those who appreciate a darker aesthetic, the Shadow Ninja is a must-have. Its sleek design and imposing presence make it a standout piece in any display.</HighlightOnScroll>
+               </div>
+               <a href="#/store" onClick={handleShopLinkClick} className="text-blue-600 hover:underline text-left inline-block">Shop Shadow Ninja →</a>
+               
+               <h2 className="text-2xl font-semibold mt-8 mb-4 text-left">4. Cosmic Guardian • Prize Figure</h2>
+               <div className="flex flex-col sm:flex-row gap-4 items-start mb-4">
+                <img src={MOCK_PRODUCTS.find(p => p.id === 'f4').images[0]} alt={MOCK_PRODUCTS.find(p => p.id === 'f4').title} className="w-full sm:w-48 rounded-lg shadow-md hover:shadow-xl transition-shadow" />
+                <HighlightOnScroll>A fantastic entry for new collectors. The Cosmic Guardian offers amazing quality for its price point, featuring vibrant colors and a fun, heroic pose.</HighlightOnScroll>
+               </div>
+               <a href="#/store" onClick={handleShopLinkClick} className="text-blue-600 hover:underline text-left inline-block">Shop Cosmic Guardian →</a>
+
+               <h2 className="text-2xl font-semibold mt-8 mb-4 text-left">5. Forest Spirit • Nendoroid</h2>
+               <div className="flex flex-col sm:flex-row gap-4 items-start mb-4">
+                <img src={MOCK_PRODUCTS.find(p => p.id === 'f5').images[0]} alt={MOCK_PRODUCTS.find(p => p.id === 'f5').title} className="w-full sm:w-48 rounded-lg shadow-md hover:shadow-xl transition-shadow" />
+                <HighlightOnScroll>Cute, customizable, and full of character. The Forest Spirit Nendoroid comes with multiple faceplates and accessories for a variety of display options.</HighlightOnScroll>
+               </div>
+               <a href="#/store" onClick={handleShopLinkClick} className="text-blue-600 hover:underline text-left inline-block">Shop Forest Spirit →</a>
+
           </div>
         </div>
       </main>
@@ -1876,18 +1990,18 @@ function BlogPostPage() {
 function CommunityNotice() {
   return (
     <main className="animated-bg w-full">
-      <div className="max-w-7xl px-4 sm:px-6 lg:px-8 py-16 text-left">
-        <div className="max-w-3xl">
-          <div className="text-6xl mb-6 animate-morph inline-block">🎌</div>
-          <h1 className="text-3xl md:text-4xl font-semibold tracking-tight">Something Special is Coming</h1>
-          <p className="text-lg text-black/60 mt-4 mb-8">We're building an exclusive space for anime enthusiasts to connect, share, and discover</p>
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-16 text-center">
+        <div className="max-w-3xl mx-auto">
+          <div className="text-6xl mb-6 animate-morph inline-block animate-fadeInUp" style={{ animationDelay: '100ms' }}>🎌</div>
+          <h1 className="text-3xl md:text-4xl font-semibold tracking-tight animate-fadeInUp" style={{ animationDelay: '200ms' }}>Something Special is Coming</h1>
+          <p className="text-lg text-black/60 mt-4 mb-8 animate-fadeInUp" style={{ animationDelay: '300ms' }}>We're building an exclusive space for anime enthusiasts to connect, share, and discover</p>
           <div className="grid sm:grid-cols-3 gap-6 mt-12 mb-12">
-            <div className="p-6 rounded-2xl bg-white/50 backdrop-blur-sm"><div className="text-2xl mb-3">💬</div><h3 className="font-medium mb-2">Forums</h3><p className="text-sm text-black/60">Discuss latest releases and classics</p></div>
-            <div className="p-6 rounded-2xl bg-white/50 backdrop-blur-sm"><div className="text-2xl mb-3">🎨</div><h3 className="font-medium mb-2">Creator Hub</h3><p className="text-sm text-black/60">Share your art and cosplay</p></div>
-            <div className="p-6 rounded-2xl bg-white/50 backdrop-blur-sm"><div className="text-2xl mb-3">🏆</div><h3 className="font-medium mb-2">Events</h3><p className="text-sm text-black/60">Exclusive drops and competitions</p></div>
+            <div className="p-6 rounded-2xl bg-white/50 backdrop-blur-sm hover:scale-105 hover:shadow-xl transition-all animate-stagger" style={{ animationDelay: '400ms' }}><div className="text-2xl mb-3">💬</div><h3 className="font-medium mb-2">Forums</h3><p className="text-sm text-black/60">Discuss latest releases and classics</p></div>
+            <div className="p-6 rounded-2xl bg-white/50 backdrop-blur-sm hover:scale-105 hover:shadow-xl transition-all animate-stagger" style={{ animationDelay: '500ms' }}><div className="text-2xl mb-3">🎨</div><h3 className="font-medium mb-2">Creator Hub</h3><p className="text-sm text-black/60">Share your art and cosplay</p></div>
+            <div className="p-6 rounded-2xl bg-white/50 backdrop-blur-sm hover:scale-105 hover:shadow-xl transition-all animate-stagger" style={{ animationDelay: '600ms' }}><div className="text-2xl mb-3">🏆</div><h3 className="font-medium mb-2">Events</h3><p className="text-sm text-black/60">Exclusive drops and competitions</p></div>
           </div>
-          <div className="inline-flex gap-3 items-center px-6 py-3 rounded-full border border-black/10 bg-white"><span className="inline-block w-2 h-2 rounded-full bg-green-500 animate-pulse"></span><span className="text-sm">Currently in development</span></div>
-          <div className="mt-12"><p className="text-sm text-black/50 mb-4">Be the first to know when we launch</p><div className="flex gap-2 max-w-md"><input type="email" placeholder="Enter your email" className="flex-1 px-4 py-3 rounded-xl bg-white border border-black/10 outline-none focus:border-black/30" /><button className="px-6 py-3 rounded-xl bg-black text-white hover:opacity-90 transition-opacity">Join Waitlist</button></div></div>
+          <div className="inline-flex gap-3 items-center px-6 py-3 rounded-full border border-black/10 bg-white animate-fadeInUp" style={{ animationDelay: '700ms' }}><span className="inline-block w-2 h-2 rounded-full bg-green-500 animate-pulse"></span><span className="text-sm">Currently in development</span></div>
+          <div className="mt-12 animate-fadeInUp" style={{ animationDelay: '800ms' }}><p className="text-sm text-black/50 mb-4">Be the first to know when we launch</p><div className="flex gap-2 max-w-md mx-auto"><input type="email" placeholder="Enter your email" className="flex-1 px-4 py-3 rounded-xl bg-white border border-black/10 outline-none focus:border-black/30" /><button className="px-6 py-3 rounded-xl bg-black text-white hover:opacity-90 transition-opacity">Join Waitlist</button></div></div>
         </div>
       </div>
     </main>
@@ -1902,7 +2016,7 @@ function HomePage({ getRecommendations, hasActivity }) {
   
   return (
     <main className="w-full px-4 sm:px-6 lg:px-8 py-16">
-      <div className="max-w-7xl">
+      <div className="max-w-7xl mx-auto">
         <div className="mb-24 text-center">
           <h1 className="text-5xl md:text-6xl font-bold tracking-tight mb-4">
             <div>
@@ -2084,6 +2198,14 @@ export default function App() {
     setCartJiggle(true);
     setTimeout(() => setCartJiggle(false), 500);
   };
+  
+  const handleFooterLinkClick = (e, category) => {
+    e.preventDefault();
+    localStorage.setItem("pk_store_cat", category);
+    window.dispatchEvent(new CustomEvent('category-change'));
+    window.location.hash = '#/store';
+  };
+
 
   let page = null;
   const pageKey = path.split('?')[0];
@@ -2100,6 +2222,11 @@ export default function App() {
   else if (path === "#/community") page = <CommunityNotice key={pageKey} />;
   else if (path === "#/login") page = <LoginPage onLogin={setUser} setToast={setToast} />;
   else if (path === "#/register") page = <RegisterPage onRegister={setUser} setToast={setToast} />;
+  else if (path === "#/shipping") page = <EmptyShell key={pageKey} title="Shipping" />;
+  else if (path === "#/faq") page = <EmptyShell key={pageKey} title="FAQ" />;
+  else if (path === "#/about") page = <EmptyShell key={pageKey} title="About" />;
+  else if (path === "#/privacy") page = <EmptyShell key={pageKey} title="Privacy" />;
+  else if (path === "#/terms") page = <EmptyShell key={pageKey} title="Terms" />;
   else if (path.startsWith("#/account")) page = <AccountPage key={pageKey} user={user} setUser={setUser} reviews={reviews} setReviews={setReviews} setToast={setToast} />;
   else page = <HomePage key={pageKey} getRecommendations={getRecommendations} hasActivity={hasActivity} />;
 
@@ -2157,18 +2284,19 @@ export default function App() {
       
       <div className="min-h-screen bg-white text-black font-inter selection:bg-black selection:text-white">
         <TopBar path={path} cartCount={cart.length} wishlistCount={wishlist.length} user={user} setUser={setUser} onSearch={onSearch} storeOpen={storeOpen} setStoreOpen={setStoreOpen} handleStoreMouseEnter={handleStoreMouseEnter} handleStoreMouseLeave={handleStoreMouseLeave} points={points} cartJiggle={cartJiggle} />
-        <StoreMegaMenu open={storeOpen} setOpen={setStoreOpen} />
+        <StoreMegaMenu open={storeOpen} setOpen={setStoreOpen} handleMouseEnter={handleStoreMouseEnter} handleMouseLeave={handleStoreMouseLeave} />
         <div key={pageKey} className="page-container pt-14">{page}</div>
         <Toast toastInfo={toast} onDismiss={() => setToast(null)} />
         <MarqueeBanner />
         <footer className="bg-zinc-100 mt-16 pt-16 pb-10">
           <div className="w-full px-4 sm:px-6 lg:px-8">
-            <div className="max-w-7xl flex flex-wrap gap-8 mb-8 text-left justify-between">
-              <div className="flex-1 min-w-[150px]"><h3 className="font-semibold mb-4">Shop</h3><ul className="space-y-2 text-black/70"><li><a href="#/store" className="hover:text-black" onClick={() => localStorage.setItem("pk_store_cat", "figures")}>Anime Figures</a></li><li><a href="#/store" className="hover:text-black" onClick={() => localStorage.setItem("pk_store_cat", "metal")}>Metal Prints</a></li><li><a href="#/store" className="hover:text-black" onClick={() => localStorage.setItem("pk_store_cat", "apparel")}>Apparel</a></li><li><a href="#/store" className="hover:text-black" onClick={() => localStorage.setItem("pk_store_cat", "merch")}>Collectibles</a></li></ul></div>
-              <div className="flex-1 min-w-[150px]"><h3 className="font-semibold mb-4">Support</h3><ul className="space-y-2 text-black/70"><li><a href="#/contact" className="hover:text-black">Contact Us</a></li><li><a href="#/account?tab=orders" className="hover:text-black">Order Status</a></li><li><a href="#/shipping" className="hover:text-black">Shipping & Returns</a></li><li><a href="#/faq" className="hover:text-black">FAQ</a></li></ul></div>
+            <div className="max-w-7xl mx-auto flex flex-wrap gap-8 mb-8 text-left justify-between">
+              <div className="flex-1 min-w-[150px]"><h3 className="font-semibold mb-4">Shop</h3><ul className="space-y-2 text-black/70"><li><a href="#/store" className="hover:text-black transition-colors" onClick={(e) => handleFooterLinkClick(e, "figures")}>Anime Figures</a></li><li><a href="#/store" className="hover:text-black transition-colors" onClick={(e) => handleFooterLinkClick(e, "metal")}>Metal Prints</a></li><li><a href="#/store" className="hover:text-black transition-colors" onClick={(e) => handleFooterLinkClick(e, "apparel")}>Apparel</a></li><li><a href="#/store" className="hover:text-black transition-colors" onClick={(e) => handleFooterLinkClick(e, "merch")}>Collectibles</a></li></ul></div>
+              <div className="flex-1 min-w-[150px]"><h3 className="font-semibold mb-4">Support</h3><ul className="space-y-2 text-black/70"><li><a href="#/contact" className="hover:text-black transition-colors">Contact Us</a></li><li><a href="#/account?tab=orders" className="hover:text-black transition-colors">Order Status</a></li><li><a href="#/shipping" className="hover:text-black transition-colors">Shipping & Returns</a></li><li><a href="#/faq" className="hover:text-black transition-colors">FAQ</a></li></ul></div>
+
               <div className="flex-1 min-w-[150px]"><h3 className="font-semibold mb-4">Company</h3><ul className="space-y-2 text-black/70"><li><a href="#/blog" className="hover:text-black">Blog</a></li><li><a href="#/careers" className="hover:text-black">Careers</a></li><li><a href="#/about" className="hover:text-black">About Peakime</a></li><li><a href="#/community" className="hover:text-black">Community</a></li></ul></div>
             </div>
-            <div className="border-t border-black/10 pt-8 text-sm text-black/60"><div className="flex flex-col md:flex-row gap-3 md:items-center md:justify-between"><div>© {new Date().getFullYear()} Peakime. All Rights Reserved. Demo for portfolio.</div><div className="flex gap-4"><a href="#/privacy" className="hover:text-black transition-colors">Privacy Policy</a><a href="#/terms" className="hover:text-black transition-colors">Terms of Service</a></div></div></div>
+            <div className="border-t border-black/10 pt-8 text-sm text-black/60"><div className="flex flex-col md:flex-row gap-3 md:items-center md:justify-between"><div>© {new Date().getFullYear()} Peakime. All Rights Reserved.</div><div className="flex gap-4"><a href="#/privacy" className="hover:text-black transition-colors">Privacy Policy</a><a href="#/terms" className="hover:text-black transition-colors">Terms of Service</a></div></div></div>
           </div>
         </footer>
       </div>
